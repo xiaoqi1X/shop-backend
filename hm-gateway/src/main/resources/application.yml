@@ -24,6 +24,10 @@ spring:
           uri: lb://trade-service
           predicates:
             - Path=/orders/**
+        - id: seckill
+          uri: lb://trade-service
+          predicates:
+            - Path=/seckill/**
         - id: pay
           uri: lb://pay-service
           predicates:
@@ -39,3 +43,4 @@ hm:
       - /search/**
       - /users/login
       - /items/**
+      - /seckill/items
