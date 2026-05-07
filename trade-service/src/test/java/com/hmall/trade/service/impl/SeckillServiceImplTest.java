@@ -6,6 +6,7 @@ import com.hmall.api.dto.ItemDTO;
 import com.hmall.common.utils.UserContext;
 import com.hmall.trade.domain.dto.SeckillOrderFormDTO;
 import com.hmall.trade.domain.enums.SeckillStatus;
+import com.hmall.trade.domain.mq.SeckillRequestMessage;
 import com.hmall.trade.domain.po.SeckillActivity;
 import com.hmall.trade.domain.po.SeckillOrder;
 import com.hmall.trade.domain.po.SeckillStock;
@@ -14,6 +15,7 @@ import com.hmall.trade.domain.vo.SeckillOrderResultVO;
 import com.hmall.trade.mapper.SeckillActivityMapper;
 import com.hmall.trade.mapper.SeckillOrderMapper;
 import com.hmall.trade.mapper.SeckillStockMapper;
+import com.hmall.trade.mq.SeckillRequestMessageProducer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,12 +52,14 @@ class SeckillServiceImplTest {
     private SeckillOrderMapper orderMapper;
     @Mock
     private ItemClient itemClient;
+    @Mock
+    private SeckillRequestMessageProducer requestMessageProducer;
 
     private SeckillServiceImpl seckillService;
 
     @BeforeEach
     void setUp() {
-        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, orderMapper, itemClient);
+        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, orderMapper, itemClient, requestMessageProducer);
         UserContext.setUser(USER_ID);
     }
 
@@ -99,33 +103,32 @@ class SeckillServiceImplTest {
     }
 
     @Test
-    void createSeckillOrderShouldDeductStockAndInsertOrderWhenValid() {
+    void createSeckillOrderShouldSendRequestMessageWhenValid() {
         LocalDateTime now = LocalDateTime.now();
         SeckillActivity activity = activity(1L, now.minusHours(1), now.plusHours(1), 1);
         when(activityMapper.selectById(1L)).thenReturn(activity);
         when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
-        when(stockMapper.deductStock(1L, 1)).thenReturn(1);
-        doAnswer(invocation -> {
-            SeckillOrder order = invocation.getArgument(0);
-            order.setId(123L);
-            return 1;
-        }).when(orderMapper).insert(any(SeckillOrder.class));
 
         SeckillOrderResultVO result = seckillService.createSeckillOrder(form(1L, ITEM_ID, 1));
 
-        assertThat(result.getStatus()).isEqualTo(SeckillStatus.SUCCESS.name());
-        assertThat(result.getSeckillOrderId()).isEqualTo(123L);
+        assertThat(result.getStatus()).isEqualTo(SeckillStatus.ACCEPTED.name());
+        assertThat(result.getRequestId()).isNotBlank();
+        assertThat(result.getSeckillOrderId()).isNull();
         assertThat(result.getTotalFee()).isEqualTo(9900);
 
-        ArgumentCaptor<SeckillOrder> captor = ArgumentCaptor.forClass(SeckillOrder.class);
-        verify(orderMapper).insert(captor.capture());
-        SeckillOrder inserted = captor.getValue();
-        assertThat(inserted.getUserId()).isEqualTo(USER_ID);
-        assertThat(inserted.getSeckillId()).isEqualTo(1L);
-        assertThat(inserted.getItemId()).isEqualTo(ITEM_ID);
-        assertThat(inserted.getStatus()).isEqualTo(SeckillStatus.SUCCESS.name());
-        assertThat(inserted.getResultCode()).isEqualTo(SeckillStatus.SUCCESS.name());
-        assertThat(inserted.getTotalFee()).isEqualTo(9900);
+        ArgumentCaptor<SeckillRequestMessage> captor = ArgumentCaptor.forClass(SeckillRequestMessage.class);
+        verify(requestMessageProducer).send(captor.capture());
+        SeckillRequestMessage message = captor.getValue();
+        assertThat(message.getRequestId()).isEqualTo(result.getRequestId());
+        assertThat(message.getUserId()).isEqualTo(USER_ID);
+        assertThat(message.getSeckillId()).isEqualTo(1L);
+        assertThat(message.getItemId()).isEqualTo(ITEM_ID);
+        assertThat(message.getNum()).isEqualTo(1);
+        assertThat(message.getSeckillPrice()).isEqualTo(9900);
+        assertThat(message.getTotalFee()).isEqualTo(9900);
+        assertThat(message.getCreateTime()).isNotNull();
+        verify(stockMapper, never()).deductStock(any(), any());
+        verify(orderMapper, never()).insert(any());
     }
 
     @Test
@@ -142,15 +145,19 @@ class SeckillServiceImplTest {
     }
 
     @Test
-    void createSeckillOrderShouldReturnSoldOutWithoutInsertingOrder() {
+    void createSeckillOrderShouldReturnFailedWhenMessageSendFails() {
         LocalDateTime now = LocalDateTime.now();
         when(activityMapper.selectById(1L)).thenReturn(activity(1L, now.minusHours(1), now.plusHours(1), 1));
         when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
-        when(stockMapper.deductStock(1L, 1)).thenReturn(0);
+        doAnswer(invocation -> {
+            throw new RuntimeException("mq unavailable");
+        }).when(requestMessageProducer).send(any(SeckillRequestMessage.class));
 
         SeckillOrderResultVO result = seckillService.createSeckillOrder(form(1L, ITEM_ID, 1));
 
-        assertThat(result.getStatus()).isEqualTo(SeckillStatus.SOLD_OUT.name());
+        assertThat(result.getStatus()).isEqualTo(SeckillStatus.FAILED.name());
+        assertThat(result.getMessage()).isEqualTo("秒杀请求入队失败，请稍后重试");
+        verify(stockMapper, never()).deductStock(any(), any());
         verify(orderMapper, never()).insert(any());
     }
 

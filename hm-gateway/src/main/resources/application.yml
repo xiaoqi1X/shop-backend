@@ -27,7 +27,7 @@ spring:
         - id: seckill
           uri: lb://trade-service
           predicates:
-            - Path=/seckill/**
+            - Path=/seckill/**,/ws/seckill/**
         - id: pay
           uri: lb://pay-service
           predicates:

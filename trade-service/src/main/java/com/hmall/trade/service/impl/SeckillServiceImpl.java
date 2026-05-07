@@ -6,6 +6,7 @@ import com.hmall.api.dto.ItemDTO;
 import com.hmall.common.utils.UserContext;
 import com.hmall.trade.domain.dto.SeckillOrderFormDTO;
 import com.hmall.trade.domain.enums.SeckillStatus;
+import com.hmall.trade.domain.mq.SeckillRequestMessage;
 import com.hmall.trade.domain.po.SeckillActivity;
 import com.hmall.trade.domain.po.SeckillOrder;
 import com.hmall.trade.domain.po.SeckillStock;
@@ -14,12 +15,10 @@ import com.hmall.trade.domain.vo.SeckillOrderResultVO;
 import com.hmall.trade.mapper.SeckillActivityMapper;
 import com.hmall.trade.mapper.SeckillOrderMapper;
 import com.hmall.trade.mapper.SeckillStockMapper;
+import com.hmall.trade.mq.SeckillRequestMessageProducer;
 import com.hmall.trade.service.ISeckillService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -27,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -41,6 +41,7 @@ public class SeckillServiceImpl implements ISeckillService {
     private final SeckillStockMapper stockMapper;
     private final SeckillOrderMapper orderMapper;
     private final ItemClient itemClient;
+    private final SeckillRequestMessageProducer requestMessageProducer;
 
     @Override
     public List<SeckillItemVO> querySeckillItems() {
@@ -67,7 +68,6 @@ public class SeckillServiceImpl implements ISeckillService {
     }
 
     @Override
-    @Transactional
     public SeckillOrderResultVO createSeckillOrder(SeckillOrderFormDTO formDTO) {
         Long userId = UserContext.getUser();
         if (userId == null) {
@@ -94,31 +94,24 @@ public class SeckillServiceImpl implements ISeckillService {
             return result(activity.getId(), activity.getItemId(), SeckillStatus.DUPLICATE_ORDER, null, null);
         }
 
-        int updated = stockMapper.deductStock(activity.getId(), num);
-        if (updated == 0) {
-            return result(activity.getId(), activity.getItemId(), SeckillStatus.SOLD_OUT, null, null);
-        }
-
+        String requestId = generateRequestId();
         int totalFee = activity.getSeckillPrice() * num;
-        SeckillOrder order = new SeckillOrder()
-                .setRequestId(null)
+        SeckillRequestMessage message = new SeckillRequestMessage()
+                .setRequestId(requestId)
                 .setSeckillId(activity.getId())
                 .setItemId(activity.getItemId())
                 .setUserId(userId)
                 .setNum(num)
                 .setSeckillPrice(activity.getSeckillPrice())
                 .setTotalFee(totalFee)
-                .setStatus(SeckillStatus.SUCCESS.name())
-                .setResultCode(SeckillStatus.SUCCESS.name())
-                .setFailureReason(null);
+                .setCreateTime(LocalDateTime.now());
         try {
-            orderMapper.insert(order);
-        } catch (DuplicateKeyException e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-            return result(activity.getId(), activity.getItemId(), SeckillStatus.DUPLICATE_ORDER, null, null);
+            requestMessageProducer.send(message);
+        } catch (RuntimeException e) {
+            return result(activity.getId(), activity.getItemId(), SeckillStatus.FAILED, null, null, "秒杀请求入队失败，请稍后重试");
         }
 
-        return result(activity.getId(), activity.getItemId(), SeckillStatus.SUCCESS, order.getId(), totalFee);
+        return result(activity.getId(), activity.getItemId(), SeckillStatus.ACCEPTED, null, totalFee, requestId, SeckillStatus.ACCEPTED.getMessage());
     }
 
     private SeckillItemVO buildItemVO(SeckillActivity activity, SeckillStock stock, ItemDTO item, LocalDateTime now) {
@@ -173,17 +166,26 @@ public class SeckillServiceImpl implements ISeckillService {
     }
 
     private SeckillOrderResultVO result(Long seckillId, Long itemId, SeckillStatus status, Long orderId, Integer totalFee) {
-        return result(seckillId, itemId, status, orderId, totalFee, status.getMessage());
+        return result(seckillId, itemId, status, orderId, totalFee, null, status.getMessage());
     }
 
     private SeckillOrderResultVO result(Long seckillId, Long itemId, SeckillStatus status, Long orderId, Integer totalFee, String message) {
+        return result(seckillId, itemId, status, orderId, totalFee, null, message);
+    }
+
+    private SeckillOrderResultVO result(Long seckillId, Long itemId, SeckillStatus status, Long orderId, Integer totalFee, String requestId, String message) {
         SeckillOrderResultVO vo = new SeckillOrderResultVO();
         vo.setSeckillOrderId(orderId);
+        vo.setRequestId(requestId);
         vo.setSeckillId(seckillId);
         vo.setItemId(itemId);
         vo.setStatus(status.name());
         vo.setMessage(message);
         vo.setTotalFee(totalFee);
         return vo;
+    }
+
+    private String generateRequestId() {
+        return UUID.randomUUID().toString().replace("-", "");
     }
 }

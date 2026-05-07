@@ -10,9 +10,34 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: root
     password: 123456
+  redis:
+    host: 192.168.150.102
+    port: 6379
+    database: 0
+    timeout: 3000ms
   cloud:
     nacos:
       server-addr: 192.168.150.102 # nacos??
+seckill:
+  async:
+    rocketmq:
+      name-server: 192.168.150.102:9876
+      request-topic: seckill_request_topic
+      request-tag: seckill_request
+      request-producer-group: trade-seckill-request-producer-group
+      request-consumer-group: trade-seckill-request-consumer-group
+      order-topic: seckill_order_topic
+      order-tag: seckill_order
+      order-producer-group: trade-seckill-order-producer-group
+      order-consumer-group: trade-seckill-order-consumer-group
+    redis:
+      stock-key-prefix: "seckill:stock:"
+      users-key-prefix: "seckill:users:"
+    token-bucket:
+      permits-per-second: 200
+      burst-capacity: 200
+    websocket:
+      endpoint: /ws/seckill
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
   configuration:

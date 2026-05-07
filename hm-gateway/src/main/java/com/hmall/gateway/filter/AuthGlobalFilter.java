@@ -44,6 +44,9 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         if (!CollUtils.isEmpty(headers)) {
             token = headers.get(0);
         }
+        if (token == null) {
+            token = request.getQueryParams().getFirst("token");
+        }
         // 4.校验并解析token
         Long userId = null;
         try {

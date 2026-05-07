@@ -11,6 +11,9 @@ public class SeckillOrderResultVO {
     @ApiModelProperty("秒杀订单ID")
     private Long seckillOrderId;
 
+    @ApiModelProperty("秒杀请求ID，用于异步结果关联")
+    private String requestId;
+
     @ApiModelProperty("秒杀活动ID")
     private Long seckillId;
 
