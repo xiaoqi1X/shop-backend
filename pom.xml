@@ -16,6 +16,7 @@
         <module>hm-api</module>
         <module>pay-service</module>
         <module>trade-service</module>
+        <module>seckill-service</module>
         <module>use-service</module>
     </modules>
 

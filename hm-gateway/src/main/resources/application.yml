@@ -25,7 +25,7 @@ spring:
           predicates:
             - Path=/orders/**
         - id: seckill
-          uri: lb://trade-service
+          uri: lb://seckill-service
           predicates:
             - Path=/seckill/**,/ws/seckill/**
         - id: pay
