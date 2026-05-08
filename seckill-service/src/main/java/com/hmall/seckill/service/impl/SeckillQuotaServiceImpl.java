@@ -1,11 +1,8 @@
 package com.hmall.seckill.service.impl;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.hmall.seckill.config.SeckillAsyncProperties;
 import com.hmall.seckill.domain.enums.SeckillQuotaResult;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
-import com.hmall.seckill.domain.po.SeckillStock;
-import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.service.SeckillQuotaService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -13,7 +10,6 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -49,7 +45,6 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final SeckillAsyncProperties properties;
-    private final SeckillStockMapper stockMapper;
 
     @Override
     public SeckillQuotaResult tryAcquire(SeckillRequestMessage requestMessage) {
@@ -63,7 +58,7 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
 
         String stockKey = stockKey(requestMessage.getSeckillId());
         String usersKey = usersKey(requestMessage.getSeckillId());
-        if (Boolean.FALSE.equals(stringRedisTemplate.hasKey(stockKey)) && !loadStock(stockKey, usersKey, requestMessage.getSeckillId())) {
+        if (Boolean.FALSE.equals(stringRedisTemplate.hasKey(stockKey))) {
             return SeckillQuotaResult.NOT_READY;
         }
 
@@ -102,19 +97,6 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
         String usersKey = usersKey(requestMessage.getSeckillId());
         stringRedisTemplate.opsForValue().increment(stockKey, num);
         stringRedisTemplate.opsForSet().remove(usersKey, requestMessage.getUserId().toString());
-    }
-
-    private boolean loadStock(String stockKey, String usersKey, Long seckillId) {
-        SeckillStock stock = stockMapper.selectOne(
-                Wrappers.<SeckillStock>lambdaQuery().eq(SeckillStock::getSeckillId, seckillId)
-        );
-        if (stock == null || stock.getAvailableStock() == null) {
-            return false;
-        }
-        Boolean success = stringRedisTemplate.opsForValue()
-                .setIfAbsent(stockKey, stock.getAvailableStock().toString(), KEY_TTL_HOURS, TimeUnit.HOURS);
-        stringRedisTemplate.expire(usersKey, KEY_TTL_HOURS, TimeUnit.HOURS);
-        return Boolean.TRUE.equals(success) || Boolean.TRUE.equals(stringRedisTemplate.hasKey(stockKey));
     }
 
     private String stockKey(Long seckillId) {

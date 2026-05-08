@@ -29,6 +29,7 @@ public class SeckillAsyncProperties {
 
     @Data
     public static class Redis {
+        private String activityKeyPrefix;
         private String stockKeyPrefix;
         private String usersKeyPrefix;
     }

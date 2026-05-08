@@ -8,14 +8,14 @@ import com.hmall.seckill.domain.dto.SeckillOrderFormDTO;
 import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.domain.po.SeckillActivity;
-import com.hmall.seckill.domain.po.SeckillOrder;
 import com.hmall.seckill.domain.po.SeckillStock;
+import com.hmall.seckill.domain.redis.SeckillActivitySnapshot;
 import com.hmall.seckill.domain.vo.SeckillItemVO;
 import com.hmall.seckill.domain.vo.SeckillOrderResultVO;
 import com.hmall.seckill.mapper.SeckillActivityMapper;
-import com.hmall.seckill.mapper.SeckillOrderMapper;
 import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.mq.SeckillRequestMessageProducer;
+import com.hmall.seckill.service.SeckillActivityCacheService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,17 +49,17 @@ class SeckillServiceImplTest {
     @Mock
     private SeckillStockMapper stockMapper;
     @Mock
-    private SeckillOrderMapper orderMapper;
-    @Mock
     private ItemClient itemClient;
     @Mock
     private SeckillRequestMessageProducer requestMessageProducer;
+    @Mock
+    private SeckillActivityCacheService activityCacheService;
 
     private SeckillServiceImpl seckillService;
 
     @BeforeEach
     void setUp() {
-        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, orderMapper, itemClient, requestMessageProducer);
+        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, itemClient, requestMessageProducer, activityCacheService);
         UserContext.setUser(USER_ID);
     }
 
@@ -105,9 +105,7 @@ class SeckillServiceImplTest {
     @Test
     void createSeckillOrderShouldSendRequestMessageWhenValid() {
         LocalDateTime now = LocalDateTime.now();
-        SeckillActivity activity = activity(1L, now.minusHours(1), now.plusHours(1), 1);
-        when(activityMapper.selectById(1L)).thenReturn(activity);
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
+        when(activityCacheService.getActivity(1L)).thenReturn(snapshot(1L, now.minusHours(1), now.plusHours(1), 1));
 
         SeckillOrderResultVO result = seckillService.createSeckillOrder(form(1L, ITEM_ID, 1));
 
@@ -128,27 +126,35 @@ class SeckillServiceImplTest {
         assertThat(message.getTotalFee()).isEqualTo(9900);
         assertThat(message.getCreateTime()).isNotNull();
         verify(stockMapper, never()).deductStock(any(), any());
-        verify(orderMapper, never()).insert(any());
     }
 
     @Test
-    void createSeckillOrderShouldReturnDuplicateWithoutDeductingStock() {
-        LocalDateTime now = LocalDateTime.now();
-        when(activityMapper.selectById(1L)).thenReturn(activity(1L, now.minusHours(1), now.plusHours(1), 1));
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1);
+    void createSeckillOrderShouldReturnNotReadyWhenActivitySnapshotMissing() {
+        when(activityCacheService.getActivity(1L)).thenReturn(null);
 
         SeckillOrderResultVO result = seckillService.createSeckillOrder(form(1L, ITEM_ID, 1));
 
-        assertThat(result.getStatus()).isEqualTo(SeckillStatus.DUPLICATE_ORDER.name());
+        assertThat(result.getStatus()).isEqualTo(SeckillStatus.NOT_READY.name());
+        verify(requestMessageProducer, never()).send(any(SeckillRequestMessage.class));
         verify(stockMapper, never()).deductStock(any(), any());
-        verify(orderMapper, never()).insert(any());
+    }
+
+    @Test
+    void createSeckillOrderShouldNotQueryOrderMapperForDuplicateCheckAtEntry() {
+        LocalDateTime now = LocalDateTime.now();
+        when(activityCacheService.getActivity(1L)).thenReturn(snapshot(1L, now.minusHours(1), now.plusHours(1), 1));
+
+        SeckillOrderResultVO result = seckillService.createSeckillOrder(form(1L, ITEM_ID, 1));
+
+        assertThat(result.getStatus()).isEqualTo(SeckillStatus.ACCEPTED.name());
+        verify(requestMessageProducer).send(any(SeckillRequestMessage.class));
+        verify(stockMapper, never()).deductStock(any(), any());
     }
 
     @Test
     void createSeckillOrderShouldReturnFailedWhenMessageSendFails() {
         LocalDateTime now = LocalDateTime.now();
-        when(activityMapper.selectById(1L)).thenReturn(activity(1L, now.minusHours(1), now.plusHours(1), 1));
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
+        when(activityCacheService.getActivity(1L)).thenReturn(snapshot(1L, now.minusHours(1), now.plusHours(1), 1));
         doAnswer(invocation -> {
             throw new RuntimeException("mq unavailable");
         }).when(requestMessageProducer).send(any(SeckillRequestMessage.class));
@@ -158,38 +164,36 @@ class SeckillServiceImplTest {
         assertThat(result.getStatus()).isEqualTo(SeckillStatus.FAILED.name());
         assertThat(result.getMessage()).isEqualTo("Failed to enqueue seckill request, please retry later");
         verify(stockMapper, never()).deductStock(any(), any());
-        verify(orderMapper, never()).insert(any());
     }
 
     @Test
     void createSeckillOrderShouldRejectNotStartedEndedAndLimitExceeded() {
         LocalDateTime now = LocalDateTime.now();
 
-        when(activityMapper.selectById(2L)).thenReturn(activity(2L, now.plusHours(1), now.plusHours(2), 1));
+        when(activityCacheService.getActivity(2L)).thenReturn(snapshot(2L, now.plusHours(1), now.plusHours(2), 1));
         assertThat(seckillService.createSeckillOrder(form(2L, ITEM_ID, 1)).getStatus())
                 .isEqualTo(SeckillStatus.NOT_STARTED.name());
 
-        when(activityMapper.selectById(3L)).thenReturn(activity(3L, now.minusHours(2), now.minusHours(1), 1));
+        when(activityCacheService.getActivity(3L)).thenReturn(snapshot(3L, now.minusHours(2), now.minusHours(1), 1));
         assertThat(seckillService.createSeckillOrder(form(3L, ITEM_ID, 1)).getStatus())
                 .isEqualTo(SeckillStatus.ENDED.name());
 
-        when(activityMapper.selectById(4L)).thenReturn(activity(4L, now.minusHours(1), now.plusHours(1), 1));
+        when(activityCacheService.getActivity(4L)).thenReturn(snapshot(4L, now.minusHours(1), now.plusHours(1), 1));
         assertThat(seckillService.createSeckillOrder(form(4L, ITEM_ID, 2)).getStatus())
                 .isEqualTo(SeckillStatus.LIMIT_EXCEEDED.name());
 
         verify(stockMapper, never()).deductStock(any(), any());
-        verify(orderMapper, never()).insert(any());
     }
 
     @Test
     void createSeckillOrderShouldRejectInvalidActivity() {
-        when(activityMapper.selectById(99L)).thenReturn(null);
+        LocalDateTime now = LocalDateTime.now();
+        when(activityCacheService.getActivity(99L)).thenReturn(snapshot(99L, now.minusHours(1), now.plusHours(1), 1).setItemId(999L));
 
         SeckillOrderResultVO result = seckillService.createSeckillOrder(form(99L, ITEM_ID, 1));
 
         assertThat(result.getStatus()).isEqualTo(SeckillStatus.INVALID_ACTIVITY.name());
         verify(stockMapper, never()).deductStock(any(), any());
-        verify(orderMapper, never()).insert(any());
     }
 
     private SeckillOrderFormDTO form(Long seckillId, Long itemId, Integer num) {
@@ -203,6 +207,17 @@ class SeckillServiceImplTest {
     private SeckillActivity activity(Long seckillId, LocalDateTime startTime, LocalDateTime endTime, Integer status) {
         return new SeckillActivity()
                 .setId(seckillId)
+                .setItemId(ITEM_ID)
+                .setSeckillPrice(9900)
+                .setStartTime(startTime)
+                .setEndTime(endTime)
+                .setLimitCount(1)
+                .setStatus(status);
+    }
+
+    private SeckillActivitySnapshot snapshot(Long seckillId, LocalDateTime startTime, LocalDateTime endTime, Integer status) {
+        return new SeckillActivitySnapshot()
+                .setSeckillId(seckillId)
                 .setItemId(ITEM_ID)
                 .setSeckillPrice(9900)
                 .setStartTime(startTime)

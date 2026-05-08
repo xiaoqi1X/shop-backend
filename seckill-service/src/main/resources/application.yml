@@ -31,6 +31,7 @@ seckill:
       order-producer-group: seckill-service-order-producer-group
       order-consumer-group: seckill-service-order-consumer-group
     redis:
+      activity-key-prefix: "seckill:activity:"
       stock-key-prefix: "seckill:stock:"
       users-key-prefix: "seckill:users:"
     token-bucket:

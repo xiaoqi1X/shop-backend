@@ -8,14 +8,14 @@ import com.hmall.seckill.domain.dto.SeckillOrderFormDTO;
 import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.domain.po.SeckillActivity;
-import com.hmall.seckill.domain.po.SeckillOrder;
 import com.hmall.seckill.domain.po.SeckillStock;
+import com.hmall.seckill.domain.redis.SeckillActivitySnapshot;
 import com.hmall.seckill.domain.vo.SeckillItemVO;
 import com.hmall.seckill.domain.vo.SeckillOrderResultVO;
 import com.hmall.seckill.mapper.SeckillActivityMapper;
-import com.hmall.seckill.mapper.SeckillOrderMapper;
 import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.mq.SeckillRequestMessageProducer;
+import com.hmall.seckill.service.SeckillActivityCacheService;
 import com.hmall.seckill.service.ISeckillService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -39,9 +39,9 @@ public class SeckillServiceImpl implements ISeckillService {
 
     private final SeckillActivityMapper activityMapper;
     private final SeckillStockMapper stockMapper;
-    private final SeckillOrderMapper orderMapper;
     private final ItemClient itemClient;
     private final SeckillRequestMessageProducer requestMessageProducer;
+    private final SeckillActivityCacheService activityCacheService;
 
     @Override
     public List<SeckillItemVO> querySeckillItems() {
@@ -81,24 +81,20 @@ public class SeckillServiceImpl implements ISeckillService {
             return result(formDTO.getSeckillId(), formDTO.getItemId(), SeckillStatus.FAILED, null, null, "Purchase count must be greater than 0");
         }
 
-        SeckillActivity activity = activityMapper.selectById(formDTO.getSeckillId());
+        SeckillActivitySnapshot activity = activityCacheService.getActivity(formDTO.getSeckillId());
+        if (activity == null) {
+            return result(formDTO.getSeckillId(), formDTO.getItemId(), SeckillStatus.NOT_READY, null, null);
+        }
         SeckillStatus invalidStatus = validateActivity(activity, formDTO.getItemId(), num, LocalDateTime.now());
         if (invalidStatus != null) {
             return result(formDTO.getSeckillId(), formDTO.getItemId(), invalidStatus, null, null);
-        }
-
-        Integer duplicateCount = orderMapper.selectCount(Wrappers.<SeckillOrder>lambdaQuery()
-                .eq(SeckillOrder::getUserId, userId)
-                .eq(SeckillOrder::getSeckillId, activity.getId()));
-        if (duplicateCount != null && duplicateCount > 0) {
-            return result(activity.getId(), activity.getItemId(), SeckillStatus.DUPLICATE_ORDER, null, null);
         }
 
         String requestId = generateRequestId();
         int totalFee = activity.getSeckillPrice() * num;
         SeckillRequestMessage message = new SeckillRequestMessage()
                 .setRequestId(requestId)
-                .setSeckillId(activity.getId())
+                .setSeckillId(activity.getSeckillId())
                 .setItemId(activity.getItemId())
                 .setUserId(userId)
                 .setNum(num)
@@ -108,10 +104,10 @@ public class SeckillServiceImpl implements ISeckillService {
         try {
             requestMessageProducer.send(message);
         } catch (RuntimeException e) {
-            return result(activity.getId(), activity.getItemId(), SeckillStatus.FAILED, null, null, "Failed to enqueue seckill request, please retry later");
+            return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.FAILED, null, null, "Failed to enqueue seckill request, please retry later");
         }
 
-        return result(activity.getId(), activity.getItemId(), SeckillStatus.ACCEPTED, null, totalFee, requestId, SeckillStatus.ACCEPTED.getMessage());
+        return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.ACCEPTED, null, totalFee, requestId, SeckillStatus.ACCEPTED.getMessage());
     }
 
     private SeckillItemVO buildItemVO(SeckillActivity activity, SeckillStock stock, ItemDTO item, LocalDateTime now) {
@@ -133,8 +129,8 @@ public class SeckillServiceImpl implements ISeckillService {
         return vo;
     }
 
-    private SeckillStatus validateActivity(SeckillActivity activity, Long itemId, int num, LocalDateTime now) {
-        if (activity == null || !Objects.equals(activity.getItemId(), itemId) || !Objects.equals(activity.getStatus(), ACTIVITY_ENABLED)) {
+    private SeckillStatus validateActivity(SeckillActivitySnapshot activity, Long itemId, int num, LocalDateTime now) {
+        if (!Objects.equals(activity.getItemId(), itemId) || !Objects.equals(activity.getStatus(), ACTIVITY_ENABLED)) {
             return SeckillStatus.INVALID_ACTIVITY;
         }
         if (now.isBefore(activity.getStartTime())) {

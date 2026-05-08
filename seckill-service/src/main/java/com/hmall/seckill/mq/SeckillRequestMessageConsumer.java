@@ -3,6 +3,7 @@ package com.hmall.seckill.mq;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmall.seckill.config.SeckillAsyncProperties;
 import com.hmall.seckill.domain.enums.SeckillQuotaResult;
+import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.service.SeckillQuotaService;
@@ -16,12 +17,14 @@ import org.apache.rocketmq.client.consumer.listener.MessageListenerConcurrently;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 
 @Slf4j
 @Component
+@DependsOn("seckillActivityCacheServiceImpl")
 @RequiredArgsConstructor
 public class SeckillRequestMessageConsumer implements InitializingBean, DisposableBean {
 
@@ -40,6 +43,8 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
         SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
         SeckillAsyncProperties.TokenBucket tokenBucketProperties = properties.getTokenBucket();
         tokenBucket = new LocalTokenBucket(tokenBucketProperties.getPermitsPerSecond(), tokenBucketProperties.getBurstCapacity());
+        log.info("Starting seckill request consumer, permitsPerSecond={}, burstCapacity={}",
+                tokenBucketProperties.getPermitsPerSecond(), tokenBucketProperties.getBurstCapacity());
 
         consumer = new DefaultMQPushConsumer(rocketmq.getRequestConsumerGroup());
         consumer.setNamesrvAddr(rocketmq.getNameServer());
@@ -56,16 +61,17 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
                     if (result == SeckillQuotaResult.SUCCESS) {
                         try {
                             orderMessageProducer.send(buildOrderMessage(requestMessage));
+                            resultPushService.push(requestMessage, SeckillStatus.QUOTA_SUCCESS, null);
                         } catch (RuntimeException e) {
                             quotaService.release(requestMessage);
                             throw e;
                         }
                     } else if (result == SeckillQuotaResult.DUPLICATE) {
-                        resultPushService.push(requestMessage, com.hmall.seckill.domain.enums.SeckillStatus.DUPLICATE_ORDER, null);
+                        resultPushService.push(requestMessage, SeckillStatus.DUPLICATE_ORDER, null);
                     } else if (result == SeckillQuotaResult.SOLD_OUT) {
-                        resultPushService.push(requestMessage, com.hmall.seckill.domain.enums.SeckillStatus.SOLD_OUT, null);
+                        resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, null);
                     } else {
-                        resultPushService.push(requestMessage, com.hmall.seckill.domain.enums.SeckillStatus.FAILED, null);
+                        resultPushService.push(requestMessage, result == SeckillQuotaResult.NOT_READY ? SeckillStatus.NOT_READY : SeckillStatus.FAILED, null);
                     }
                     log.debug("Consumed seckill request, requestId={}, result={}, msgId={}",
                             requestMessage.getRequestId(), result, msg.getMsgId());
