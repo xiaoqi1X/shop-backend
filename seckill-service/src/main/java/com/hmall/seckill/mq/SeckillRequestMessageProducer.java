@@ -3,6 +3,7 @@ package com.hmall.seckill.mq;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmall.seckill.config.SeckillAsyncProperties;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
+import com.hmall.seckill.support.SeckillMetricsLogger;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
@@ -34,6 +35,7 @@ public class SeckillRequestMessageProducer implements InitializingBean, Disposab
     }
 
     public void send(SeckillRequestMessage requestMessage) {
+        long startedAt = SeckillMetricsLogger.start();
         try {
             SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
             byte[] body = objectMapper.writeValueAsString(requestMessage).getBytes(StandardCharsets.UTF_8);
@@ -42,8 +44,10 @@ public class SeckillRequestMessageProducer implements InitializingBean, Disposab
             if (result.getSendStatus() != SendStatus.SEND_OK) {
                 throw new IllegalStateException("Unexpected RocketMQ send status: " + result.getSendStatus());
             }
+            SeckillMetricsLogger.info("request_mq_send", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "msgId", result.getMsgId(), "sendStatus", result.getSendStatus(), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.debug("Sent seckill request message, requestId={}, msgId={}", requestMessage.getRequestId(), result.getMsgId());
         } catch (Exception e) {
+            SeckillMetricsLogger.warn("request_mq_send", e, "requestId", requestMessage == null ? null : requestMessage.getRequestId(), "seckillId", requestMessage == null ? null : requestMessage.getSeckillId(), "userId", requestMessage == null ? null : requestMessage.getUserId(), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             throw new RuntimeException("Failed to send seckill request message, requestId=" + requestMessage.getRequestId(), e);
         }
     }

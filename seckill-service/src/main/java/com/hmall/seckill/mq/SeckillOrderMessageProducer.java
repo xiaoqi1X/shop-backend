@@ -3,6 +3,7 @@ package com.hmall.seckill.mq;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmall.seckill.config.SeckillAsyncProperties;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
+import com.hmall.seckill.support.SeckillMetricsLogger;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
@@ -34,6 +35,7 @@ public class SeckillOrderMessageProducer implements InitializingBean, Disposable
     }
 
     public void send(SeckillOrderMessage orderMessage) {
+        long startedAt = SeckillMetricsLogger.start();
         try {
             SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
             byte[] body = objectMapper.writeValueAsString(orderMessage).getBytes(StandardCharsets.UTF_8);
@@ -42,9 +44,11 @@ public class SeckillOrderMessageProducer implements InitializingBean, Disposable
             if (result.getSendStatus() != SendStatus.SEND_OK) {
                 throw new IllegalStateException("Unexpected RocketMQ send status: " + result.getSendStatus());
             }
+            SeckillMetricsLogger.info("order_mq_send", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", result.getMsgId(), "sendStatus", result.getSendStatus(), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.debug("Sent seckill order message, requestId={}, orderId={}, msgId={}",
                     orderMessage.getRequestId(), orderMessage.getOrderId(), result.getMsgId());
         } catch (Exception e) {
+            SeckillMetricsLogger.warn("order_mq_send", e, "requestId", orderMessage == null ? null : orderMessage.getRequestId(), "orderId", orderMessage == null ? null : orderMessage.getOrderId(), "seckillId", orderMessage == null ? null : orderMessage.getSeckillId(), "userId", orderMessage == null ? null : orderMessage.getUserId(), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             throw new RuntimeException("Failed to send seckill order message, requestId=" + orderMessage.getRequestId(), e);
         }
     }

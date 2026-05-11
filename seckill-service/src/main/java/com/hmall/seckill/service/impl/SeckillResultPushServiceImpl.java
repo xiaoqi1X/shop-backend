@@ -5,6 +5,7 @@ import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.domain.vo.SeckillOrderResultVO;
 import com.hmall.seckill.service.SeckillResultPushService;
+import com.hmall.seckill.support.SeckillMetricsLogger;
 import com.hmall.seckill.websocket.SeckillResultWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +20,9 @@ public class SeckillResultPushServiceImpl implements SeckillResultPushService {
 
     @Override
     public void push(SeckillRequestMessage requestMessage, SeckillStatus status, String message) {
+        long startedAt = SeckillMetricsLogger.start();
         if (requestMessage == null || requestMessage.getUserId() == null) {
+            SeckillMetricsLogger.info("ws_push", "status", status == null ? null : status.name(), "delivered", false, "reason", "invalid_message", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return;
         }
         try {
@@ -32,11 +35,13 @@ public class SeckillResultPushServiceImpl implements SeckillResultPushService {
             result.setTotalFee(requestMessage.getTotalFee());
             String payload = objectMapper.writeValueAsString(result);
             boolean delivered = SeckillResultWebSocketHandler.send(requestMessage.getUserId(), payload);
+            SeckillMetricsLogger.info("ws_push", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "status", status.name(), "delivered", delivered, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             if (!delivered) {
                 log.debug("No websocket session for seckill result, userId={}, requestId={}",
                         requestMessage.getUserId(), requestMessage.getRequestId());
             }
         } catch (Exception e) {
+            SeckillMetricsLogger.warn("ws_push", e, "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "status", status == null ? null : status.name(), "delivered", false, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.warn("Failed to push seckill result, requestId={}", requestMessage.getRequestId(), e);
         }
     }

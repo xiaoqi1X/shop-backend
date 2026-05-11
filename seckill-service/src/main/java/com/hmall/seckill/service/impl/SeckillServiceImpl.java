@@ -17,6 +17,7 @@ import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.mq.SeckillRequestMessageProducer;
 import com.hmall.seckill.service.SeckillActivityCacheService;
 import com.hmall.seckill.service.ISeckillService;
+import com.hmall.seckill.support.SeckillMetricsLogger;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -69,26 +70,34 @@ public class SeckillServiceImpl implements ISeckillService {
 
     @Override
     public SeckillOrderResultVO createSeckillOrder(SeckillOrderFormDTO formDTO) {
+        long startedAt = SeckillMetricsLogger.start();
         Long userId = UserContext.getUser();
         if (userId == null) {
+            SeckillMetricsLogger.info("http_accept", "status", SeckillStatus.FAILED.name(), "reason", "missing_user", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(null, null, SeckillStatus.FAILED, null, null, "Missing login user");
         }
         if (formDTO == null || formDTO.getSeckillId() == null || formDTO.getItemId() == null) {
+            SeckillMetricsLogger.info("http_accept", "seckillId", formDTO == null ? null : formDTO.getSeckillId(), "userId", userId, "status", SeckillStatus.INVALID_ACTIVITY.name(), "reason", "invalid_form", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(null, null, SeckillStatus.INVALID_ACTIVITY, null, null);
         }
         int num = formDTO.getNum() == null ? DEFAULT_NUM : formDTO.getNum();
         if (num <= 0) {
+            SeckillMetricsLogger.info("http_accept", "seckillId", formDTO.getSeckillId(), "userId", userId, "status", SeckillStatus.FAILED.name(), "reason", "invalid_num", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(formDTO.getSeckillId(), formDTO.getItemId(), SeckillStatus.FAILED, null, null, "Purchase count must be greater than 0");
         }
 
+        long validationStartedAt = SeckillMetricsLogger.start();
         SeckillActivitySnapshot activity = activityCacheService.getActivity(formDTO.getSeckillId());
         if (activity == null) {
+            SeckillMetricsLogger.info("http_accept", "seckillId", formDTO.getSeckillId(), "userId", userId, "status", SeckillStatus.NOT_READY.name(), "validateMs", SeckillMetricsLogger.elapsedMs(validationStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(formDTO.getSeckillId(), formDTO.getItemId(), SeckillStatus.NOT_READY, null, null);
         }
         SeckillStatus invalidStatus = validateActivity(activity, formDTO.getItemId(), num, LocalDateTime.now());
         if (invalidStatus != null) {
+            SeckillMetricsLogger.info("http_accept", "seckillId", formDTO.getSeckillId(), "userId", userId, "status", invalidStatus.name(), "validateMs", SeckillMetricsLogger.elapsedMs(validationStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(formDTO.getSeckillId(), formDTO.getItemId(), invalidStatus, null, null);
         }
+        long validationMs = SeckillMetricsLogger.elapsedMs(validationStartedAt);
 
         String requestId = generateRequestId();
         int totalFee = activity.getSeckillPrice() * num;
@@ -101,11 +110,14 @@ public class SeckillServiceImpl implements ISeckillService {
                 .setSeckillPrice(activity.getSeckillPrice())
                 .setTotalFee(totalFee)
                 .setCreateTime(LocalDateTime.now());
+        long mqStartedAt = SeckillMetricsLogger.start();
         try {
             requestMessageProducer.send(message);
         } catch (RuntimeException e) {
+            SeckillMetricsLogger.warn("http_accept", e, "requestId", requestId, "seckillId", activity.getSeckillId(), "userId", userId, "status", SeckillStatus.FAILED.name(), "validateMs", validationMs, "mqSendMs", SeckillMetricsLogger.elapsedMs(mqStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.FAILED, null, null, "Failed to enqueue seckill request, please retry later");
         }
+        SeckillMetricsLogger.info("http_accept", "requestId", requestId, "seckillId", activity.getSeckillId(), "userId", userId, "status", SeckillStatus.ACCEPTED.name(), "validateMs", validationMs, "mqSendMs", SeckillMetricsLogger.elapsedMs(mqStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
 
         return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.ACCEPTED, null, totalFee, requestId, SeckillStatus.ACCEPTED.getMessage());
     }

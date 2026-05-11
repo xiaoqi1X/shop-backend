@@ -4,6 +4,7 @@ import com.hmall.seckill.config.SeckillAsyncProperties;
 import com.hmall.seckill.domain.enums.SeckillQuotaResult;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.service.SeckillQuotaService;
+import com.hmall.seckill.support.SeckillMetricsLogger;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -48,20 +49,25 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
 
     @Override
     public SeckillQuotaResult tryAcquire(SeckillRequestMessage requestMessage) {
+        long startedAt = SeckillMetricsLogger.start();
         if (requestMessage == null || requestMessage.getSeckillId() == null || requestMessage.getUserId() == null) {
+            SeckillMetricsLogger.info("redis_quota", "result", SeckillQuotaResult.FAILED, "reason", "invalid_message", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return SeckillQuotaResult.FAILED;
         }
         int num = requestMessage.getNum() == null ? 1 : requestMessage.getNum();
         if (num <= 0) {
+            SeckillMetricsLogger.info("redis_quota", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", SeckillQuotaResult.FAILED, "reason", "invalid_num", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return SeckillQuotaResult.FAILED;
         }
 
         String stockKey = stockKey(requestMessage.getSeckillId());
         String usersKey = usersKey(requestMessage.getSeckillId());
         if (Boolean.FALSE.equals(stringRedisTemplate.hasKey(stockKey))) {
+            SeckillMetricsLogger.info("redis_quota", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", SeckillQuotaResult.NOT_READY, "reason", "missing_stock_key", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return SeckillQuotaResult.NOT_READY;
         }
 
+        long luaStartedAt = SeckillMetricsLogger.start();
         Long code = stringRedisTemplate.execute(
                 QUOTA_SCRIPT,
                 Arrays.asList(stockKey, usersKey),
@@ -69,34 +75,40 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
                 Integer.toString(num),
                 Long.toString(KEY_TTL_SECONDS)
         );
+        long luaMs = SeckillMetricsLogger.elapsedMs(luaStartedAt);
+        SeckillQuotaResult result;
         if (Objects.equals(code, LUA_SUCCESS)) {
-            return SeckillQuotaResult.SUCCESS;
+            result = SeckillQuotaResult.SUCCESS;
+        } else if (Objects.equals(code, LUA_DUPLICATE)) {
+            result = SeckillQuotaResult.DUPLICATE;
+        } else if (Objects.equals(code, LUA_SOLD_OUT)) {
+            result = SeckillQuotaResult.SOLD_OUT;
+        } else if (Objects.equals(code, LUA_NOT_READY)) {
+            result = SeckillQuotaResult.NOT_READY;
+        } else {
+            result = SeckillQuotaResult.FAILED;
         }
-        if (Objects.equals(code, LUA_DUPLICATE)) {
-            return SeckillQuotaResult.DUPLICATE;
-        }
-        if (Objects.equals(code, LUA_SOLD_OUT)) {
-            return SeckillQuotaResult.SOLD_OUT;
-        }
-        if (Objects.equals(code, LUA_NOT_READY)) {
-            return SeckillQuotaResult.NOT_READY;
-        }
-        return SeckillQuotaResult.FAILED;
+        SeckillMetricsLogger.info("redis_quota", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", result, "luaCode", code, "luaMs", luaMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+        return result;
     }
 
     @Override
     public void release(SeckillRequestMessage requestMessage) {
+        long startedAt = SeckillMetricsLogger.start();
         if (requestMessage == null || requestMessage.getSeckillId() == null || requestMessage.getUserId() == null) {
+            SeckillMetricsLogger.info("redis_quota_release", "result", "SKIPPED", "reason", "invalid_message", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return;
         }
         int num = requestMessage.getNum() == null ? 1 : requestMessage.getNum();
         if (num <= 0) {
+            SeckillMetricsLogger.info("redis_quota_release", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", "SKIPPED", "reason", "invalid_num", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return;
         }
         String stockKey = stockKey(requestMessage.getSeckillId());
         String usersKey = usersKey(requestMessage.getSeckillId());
         stringRedisTemplate.opsForValue().increment(stockKey, num);
         stringRedisTemplate.opsForSet().remove(usersKey, requestMessage.getUserId().toString());
+        SeckillMetricsLogger.info("redis_quota_release", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", "RELEASED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
     }
 
     private String stockKey(Long seckillId) {
