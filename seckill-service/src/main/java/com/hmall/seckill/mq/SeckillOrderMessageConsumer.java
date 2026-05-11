@@ -40,6 +40,13 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
         SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
         consumer = new DefaultMQPushConsumer(rocketmq.getOrderConsumerGroup());
         consumer.setNamesrvAddr(rocketmq.getNameServer());
+        applyConsumerProperties(rocketmq.getOrderConsumer());
+        log.info("Starting seckill order consumer rocketmq settings, consumeThreadMin={}, consumeThreadMax={}, consumeMessageBatchMaxSize={}, consumeTimeoutMinutes={}, maxReconsumeTimes={}",
+                rocketmq.getOrderConsumer().getConsumeThreadMin(),
+                rocketmq.getOrderConsumer().getConsumeThreadMax(),
+                rocketmq.getOrderConsumer().getConsumeMessageBatchMaxSize(),
+                rocketmq.getOrderConsumer().getConsumeTimeoutMinutes(),
+                rocketmq.getOrderConsumer().getMaxReconsumeTimes());
         consumer.subscribe(rocketmq.getOrderTopic(), rocketmq.getOrderTag());
         consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -> {
             for (MessageExt msg : msgs) {
@@ -80,6 +87,24 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
         consumer.start();
+    }
+
+    private void applyConsumerProperties(SeckillAsyncProperties.Consumer consumerProperties) {
+        if (consumerProperties.getConsumeThreadMin() > 0) {
+            consumer.setConsumeThreadMin(consumerProperties.getConsumeThreadMin());
+        }
+        if (consumerProperties.getConsumeThreadMax() > 0) {
+            consumer.setConsumeThreadMax(consumerProperties.getConsumeThreadMax());
+        }
+        if (consumerProperties.getConsumeMessageBatchMaxSize() > 0) {
+            consumer.setConsumeMessageBatchMaxSize(consumerProperties.getConsumeMessageBatchMaxSize());
+        }
+        if (consumerProperties.getConsumeTimeoutMinutes() > 0) {
+            consumer.setConsumeTimeout(consumerProperties.getConsumeTimeoutMinutes());
+        }
+        if (consumerProperties.getMaxReconsumeTimes() >= 0) {
+            consumer.setMaxReconsumeTimes(consumerProperties.getMaxReconsumeTimes());
+        }
     }
 
     private SeckillRequestMessage toRequestMessage(SeckillOrderMessage orderMessage) {

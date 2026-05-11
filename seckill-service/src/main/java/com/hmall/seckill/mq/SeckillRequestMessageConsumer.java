@@ -49,6 +49,13 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
 
         consumer = new DefaultMQPushConsumer(rocketmq.getRequestConsumerGroup());
         consumer.setNamesrvAddr(rocketmq.getNameServer());
+        applyConsumerProperties(rocketmq.getRequestConsumer());
+        log.info("Starting seckill request consumer rocketmq settings, consumeThreadMin={}, consumeThreadMax={}, consumeMessageBatchMaxSize={}, consumeTimeoutMinutes={}, maxReconsumeTimes={}",
+                rocketmq.getRequestConsumer().getConsumeThreadMin(),
+                rocketmq.getRequestConsumer().getConsumeThreadMax(),
+                rocketmq.getRequestConsumer().getConsumeMessageBatchMaxSize(),
+                rocketmq.getRequestConsumer().getConsumeTimeoutMinutes(),
+                rocketmq.getRequestConsumer().getMaxReconsumeTimes());
         consumer.subscribe(rocketmq.getRequestTopic(), rocketmq.getRequestTag());
         consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -> {
             for (MessageExt msg : msgs) {
@@ -100,6 +107,24 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
         consumer.start();
+    }
+
+    private void applyConsumerProperties(SeckillAsyncProperties.Consumer consumerProperties) {
+        if (consumerProperties.getConsumeThreadMin() > 0) {
+            consumer.setConsumeThreadMin(consumerProperties.getConsumeThreadMin());
+        }
+        if (consumerProperties.getConsumeThreadMax() > 0) {
+            consumer.setConsumeThreadMax(consumerProperties.getConsumeThreadMax());
+        }
+        if (consumerProperties.getConsumeMessageBatchMaxSize() > 0) {
+            consumer.setConsumeMessageBatchMaxSize(consumerProperties.getConsumeMessageBatchMaxSize());
+        }
+        if (consumerProperties.getConsumeTimeoutMinutes() > 0) {
+            consumer.setConsumeTimeout(consumerProperties.getConsumeTimeoutMinutes());
+        }
+        if (consumerProperties.getMaxReconsumeTimes() >= 0) {
+            consumer.setMaxReconsumeTimes(consumerProperties.getMaxReconsumeTimes());
+        }
     }
 
     private SeckillOrderMessage buildOrderMessage(SeckillRequestMessage requestMessage) {

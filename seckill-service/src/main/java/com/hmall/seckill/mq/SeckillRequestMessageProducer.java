@@ -31,7 +31,25 @@ public class SeckillRequestMessageProducer implements InitializingBean, Disposab
         SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
         producer = new DefaultMQProducer(rocketmq.getRequestProducerGroup());
         producer.setNamesrvAddr(rocketmq.getNameServer());
+        applyProducerProperties(rocketmq);
+        log.info("Starting seckill request producer, sendTimeoutMs={}, retryTimesWhenSendFailed={}, retryTimesWhenSendAsyncFailed={}",
+                rocketmq.getProducer().getSendTimeoutMs(),
+                rocketmq.getProducer().getRetryTimesWhenSendFailed(),
+                rocketmq.getProducer().getRetryTimesWhenSendAsyncFailed());
         producer.start();
+    }
+
+    private void applyProducerProperties(SeckillAsyncProperties.Rocketmq rocketmq) {
+        SeckillAsyncProperties.Producer producerProperties = rocketmq.getProducer();
+        if (producerProperties.getSendTimeoutMs() > 0) {
+            producer.setSendMsgTimeout(producerProperties.getSendTimeoutMs());
+        }
+        if (producerProperties.getRetryTimesWhenSendFailed() >= 0) {
+            producer.setRetryTimesWhenSendFailed(producerProperties.getRetryTimesWhenSendFailed());
+        }
+        if (producerProperties.getRetryTimesWhenSendAsyncFailed() >= 0) {
+            producer.setRetryTimesWhenSendAsyncFailed(producerProperties.getRetryTimesWhenSendAsyncFailed());
+        }
     }
 
     public void send(SeckillRequestMessage requestMessage) {

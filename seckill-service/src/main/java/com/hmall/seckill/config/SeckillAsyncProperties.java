@@ -21,10 +21,29 @@ public class SeckillAsyncProperties {
         private String requestTag;
         private String requestProducerGroup;
         private String requestConsumerGroup;
+        private Producer producer = new Producer();
+        private Consumer requestConsumer = new Consumer();
+        private Consumer orderConsumer = new Consumer();
         private String orderTopic;
         private String orderTag;
         private String orderProducerGroup;
         private String orderConsumerGroup;
+    }
+
+    @Data
+    public static class Producer {
+        private int sendTimeoutMs;
+        private int retryTimesWhenSendFailed;
+        private int retryTimesWhenSendAsyncFailed;
+    }
+
+    @Data
+    public static class Consumer {
+        private int consumeThreadMin;
+        private int consumeThreadMax;
+        private int consumeMessageBatchMaxSize;
+        private int consumeTimeoutMinutes;
+        private int maxReconsumeTimes;
     }
 
     @Data

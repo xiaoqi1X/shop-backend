@@ -26,6 +26,22 @@ seckill:
       request-tag: seckill_request
       request-producer-group: seckill-service-request-producer-group
       request-consumer-group: seckill-service-request-consumer-group
+      producer:
+        send-timeout-ms: 3000
+        retry-times-when-send-failed: 2
+        retry-times-when-send-async-failed: 2
+      request-consumer:
+        consume-thread-min: 2
+        consume-thread-max: 8
+        consume-message-batch-max-size: 1
+        consume-timeout-minutes: 15
+        max-reconsume-times: 3
+      order-consumer:
+        consume-thread-min: 2
+        consume-thread-max: 4
+        consume-message-batch-max-size: 1
+        consume-timeout-minutes: 15
+        max-reconsume-times: 3
       order-topic: seckill_order_topic
       order-tag: seckill_order
       order-producer-group: seckill-service-order-producer-group
@@ -35,8 +51,8 @@ seckill:
       stock-key-prefix: "seckill:stock:"
       users-key-prefix: "seckill:users:"
     token-bucket:
-      permits-per-second: 200
-      burst-capacity: 200
+      permits-per-second: 300
+      burst-capacity: 300
     websocket:
       endpoint: /ws/seckill
 mybatis-plus:
