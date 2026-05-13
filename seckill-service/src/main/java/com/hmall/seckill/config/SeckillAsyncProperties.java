@@ -51,6 +51,8 @@ public class SeckillAsyncProperties {
         private String activityKeyPrefix;
         private String stockKeyPrefix;
         private String usersKeyPrefix;
+        private String resultKeyPrefix;
+        private long resultTtlSeconds;
     }
 
     @Data

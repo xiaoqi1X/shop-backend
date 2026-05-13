@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.domain.vo.SeckillOrderResultVO;
+import com.hmall.seckill.service.SeckillResultService;
 import com.hmall.seckill.service.SeckillResultPushService;
 import com.hmall.seckill.support.SeckillMetricsLogger;
 import com.hmall.seckill.websocket.SeckillResultWebSocketHandler;
@@ -17,16 +18,24 @@ import org.springframework.stereotype.Service;
 public class SeckillResultPushServiceImpl implements SeckillResultPushService {
 
     private final ObjectMapper objectMapper;
+    private final SeckillResultService resultService;
 
     @Override
     public void push(SeckillRequestMessage requestMessage, SeckillStatus status, String message) {
+        push(requestMessage, status, message, null);
+    }
+
+    @Override
+    public void push(SeckillRequestMessage requestMessage, SeckillStatus status, String message, Long orderId) {
         long startedAt = SeckillMetricsLogger.start();
         if (requestMessage == null || requestMessage.getUserId() == null) {
             SeckillMetricsLogger.info("ws_push", "status", status == null ? null : status.name(), "delivered", false, "reason", "invalid_message", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return;
         }
+        resultService.save(requestMessage, status, message, orderId);
         try {
             SeckillOrderResultVO result = new SeckillOrderResultVO();
+            result.setSeckillOrderId(orderId);
             result.setRequestId(requestMessage.getRequestId());
             result.setSeckillId(requestMessage.getSeckillId());
             result.setItemId(requestMessage.getItemId());

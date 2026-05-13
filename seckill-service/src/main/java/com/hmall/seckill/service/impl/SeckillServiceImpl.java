@@ -17,6 +17,7 @@ import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.mq.SeckillRequestMessageProducer;
 import com.hmall.seckill.service.SeckillActivityCacheService;
 import com.hmall.seckill.service.ISeckillService;
+import com.hmall.seckill.service.SeckillResultService;
 import com.hmall.seckill.support.SeckillMetricsLogger;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -43,6 +44,7 @@ public class SeckillServiceImpl implements ISeckillService {
     private final ItemClient itemClient;
     private final SeckillRequestMessageProducer requestMessageProducer;
     private final SeckillActivityCacheService activityCacheService;
+    private final SeckillResultService resultService;
 
     @Override
     public List<SeckillItemVO> querySeckillItems() {
@@ -113,6 +115,7 @@ public class SeckillServiceImpl implements ISeckillService {
         long mqStartedAt = SeckillMetricsLogger.start();
         try {
             requestMessageProducer.send(message);
+            resultService.save(message, SeckillStatus.ACCEPTED, null);
         } catch (RuntimeException e) {
             SeckillMetricsLogger.warn("http_accept", e, "requestId", requestId, "seckillId", activity.getSeckillId(), "userId", userId, "status", SeckillStatus.FAILED.name(), "validateMs", validationMs, "mqSendMs", SeckillMetricsLogger.elapsedMs(mqStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.FAILED, null, null, "Failed to enqueue seckill request, please retry later");
@@ -120,6 +123,11 @@ public class SeckillServiceImpl implements ISeckillService {
         SeckillMetricsLogger.info("http_accept", "requestId", requestId, "seckillId", activity.getSeckillId(), "userId", userId, "status", SeckillStatus.ACCEPTED.name(), "validateMs", validationMs, "mqSendMs", SeckillMetricsLogger.elapsedMs(mqStartedAt), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
 
         return result(activity.getSeckillId(), activity.getItemId(), SeckillStatus.ACCEPTED, null, totalFee, requestId, SeckillStatus.ACCEPTED.getMessage());
+    }
+
+    @Override
+    public SeckillOrderResultVO queryOrderResult(String requestId) {
+        return resultService.queryByRequestId(requestId);
     }
 
     private SeckillItemVO buildItemVO(SeckillActivity activity, SeckillStock stock, ItemDTO item, LocalDateTime now) {

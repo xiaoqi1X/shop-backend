@@ -11,4 +11,6 @@ public interface ISeckillService {
     List<SeckillItemVO> querySeckillItems();
 
     SeckillOrderResultVO createSeckillOrder(SeckillOrderFormDTO formDTO);
+
+    SeckillOrderResultVO queryOrderResult(String requestId);
 }

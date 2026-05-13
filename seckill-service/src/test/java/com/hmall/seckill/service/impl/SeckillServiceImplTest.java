@@ -16,6 +16,7 @@ import com.hmall.seckill.mapper.SeckillActivityMapper;
 import com.hmall.seckill.mapper.SeckillStockMapper;
 import com.hmall.seckill.mq.SeckillRequestMessageProducer;
 import com.hmall.seckill.service.SeckillActivityCacheService;
+import com.hmall.seckill.service.SeckillResultService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,12 +55,14 @@ class SeckillServiceImplTest {
     private SeckillRequestMessageProducer requestMessageProducer;
     @Mock
     private SeckillActivityCacheService activityCacheService;
+    @Mock
+    private SeckillResultService resultService;
 
     private SeckillServiceImpl seckillService;
 
     @BeforeEach
     void setUp() {
-        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, itemClient, requestMessageProducer, activityCacheService);
+        seckillService = new SeckillServiceImpl(activityMapper, stockMapper, itemClient, requestMessageProducer, activityCacheService, resultService);
         UserContext.setUser(USER_ID);
     }
 
@@ -125,6 +128,7 @@ class SeckillServiceImplTest {
         assertThat(message.getSeckillPrice()).isEqualTo(9900);
         assertThat(message.getTotalFee()).isEqualTo(9900);
         assertThat(message.getCreateTime()).isNotNull();
+        verify(resultService).save(message, SeckillStatus.ACCEPTED, null);
         verify(stockMapper, never()).deductStock(any(), any());
     }
 

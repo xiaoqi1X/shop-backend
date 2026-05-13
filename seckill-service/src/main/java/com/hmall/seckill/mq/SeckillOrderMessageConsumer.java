@@ -61,7 +61,7 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
                     boolean finalized = finalizeService.finalizeOrder(orderMessage);
                     long finalizeMs = SeckillMetricsLogger.elapsedMs(finalizeStartedAt);
                     if (finalized) {
-                        resultPushService.push(toRequestMessage(orderMessage), SeckillStatus.SUCCESS, null);
+                        resultPushService.push(toRequestMessage(orderMessage), SeckillStatus.SUCCESS, null, orderMessage.getOrderId());
                     }
                     SeckillMetricsLogger.info("order_consume", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "finalized", finalized, "finalizeMs", finalizeMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
                     log.debug("Finalized seckill order, requestId={}, orderId={}, msgId={}",

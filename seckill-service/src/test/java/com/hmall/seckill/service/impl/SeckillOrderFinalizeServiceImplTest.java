@@ -1,6 +1,5 @@
 package com.hmall.seckill.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.hmall.seckill.domain.exception.SeckillStockDeductFailedException;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
 import com.hmall.seckill.domain.po.SeckillOrder;
@@ -12,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
 
@@ -39,7 +39,6 @@ class SeckillOrderFinalizeServiceImplTest {
 
     @Test
     void finalizeOrderShouldInsertOrderAndDeductStock() {
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
         when(orderMapper.insert(any(SeckillOrder.class))).thenReturn(1);
         when(stockMapper.deductStock(1L, 1)).thenReturn(1);
 
@@ -58,19 +57,17 @@ class SeckillOrderFinalizeServiceImplTest {
     }
 
     @Test
-    void finalizeOrderShouldIgnoreDuplicateUserOrder() {
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1);
+    void finalizeOrderShouldIgnoreDuplicateKeyOrder() {
+        when(orderMapper.insert(any(SeckillOrder.class))).thenThrow(new DuplicateKeyException("duplicate"));
 
         boolean finalized = finalizeService.finalizeOrder(message());
 
         assertThat(finalized).isFalse();
-        verify(orderMapper, never()).insert(any());
         verify(stockMapper, never()).deductStock(any(), any());
     }
 
     @Test
     void finalizeOrderShouldRetryWhenDatabaseStockCannotBeDeducted() {
-        when(orderMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0);
         when(orderMapper.insert(any(SeckillOrder.class))).thenReturn(1);
         when(stockMapper.deductStock(1L, 1)).thenReturn(0);
 

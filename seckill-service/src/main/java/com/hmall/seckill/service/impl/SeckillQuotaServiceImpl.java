@@ -22,6 +22,9 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
     private static final Long LUA_DUPLICATE = 2L;
     private static final Long LUA_SOLD_OUT = 3L;
     private static final Long LUA_NOT_READY = 4L;
+    private static final Long LUA_RELEASED = 1L;
+    private static final Long LUA_RELEASE_SKIPPED = 2L;
+    private static final Long LUA_RELEASE_NOT_READY = 3L;
     private static final long KEY_TTL_HOURS = 48L;
     private static final long KEY_TTL_SECONDS = TimeUnit.HOURS.toSeconds(KEY_TTL_HOURS);
 
@@ -38,6 +41,21 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
                     "end " +
                     "redis.call('DECRBY', KEYS[1], ARGV[2]) " +
                     "redis.call('SADD', KEYS[2], ARGV[1]) " +
+                    "redis.call('EXPIRE', KEYS[1], ARGV[3]) " +
+                    "redis.call('EXPIRE', KEYS[2], ARGV[3]) " +
+                    "return 1",
+            Long.class
+    );
+
+    private static final DefaultRedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('EXISTS', KEYS[1]) == 0 then " +
+                    "return 3 " +
+                    "end " +
+                    "if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 0 then " +
+                    "return 2 " +
+                    "end " +
+                    "redis.call('INCRBY', KEYS[1], ARGV[2]) " +
+                    "redis.call('SREM', KEYS[2], ARGV[1]) " +
                     "redis.call('EXPIRE', KEYS[1], ARGV[3]) " +
                     "redis.call('EXPIRE', KEYS[2], ARGV[3]) " +
                     "return 1",
@@ -106,9 +124,26 @@ public class SeckillQuotaServiceImpl implements SeckillQuotaService {
         }
         String stockKey = stockKey(requestMessage.getSeckillId());
         String usersKey = usersKey(requestMessage.getSeckillId());
-        stringRedisTemplate.opsForValue().increment(stockKey, num);
-        stringRedisTemplate.opsForSet().remove(usersKey, requestMessage.getUserId().toString());
-        SeckillMetricsLogger.info("redis_quota_release", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", "RELEASED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+        long luaStartedAt = SeckillMetricsLogger.start();
+        Long code = stringRedisTemplate.execute(
+                RELEASE_SCRIPT,
+                Arrays.asList(stockKey, usersKey),
+                requestMessage.getUserId().toString(),
+                Integer.toString(num),
+                Long.toString(KEY_TTL_SECONDS)
+        );
+        long luaMs = SeckillMetricsLogger.elapsedMs(luaStartedAt);
+        String result;
+        if (Objects.equals(code, LUA_RELEASED)) {
+            result = "RELEASED";
+        } else if (Objects.equals(code, LUA_RELEASE_SKIPPED)) {
+            result = "SKIPPED";
+        } else if (Objects.equals(code, LUA_RELEASE_NOT_READY)) {
+            result = "NOT_READY";
+        } else {
+            result = "FAILED";
+        }
+        SeckillMetricsLogger.info("redis_quota_release", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "result", result, "luaCode", code, "luaMs", luaMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
     }
 
     private String stockKey(Long seckillId) {

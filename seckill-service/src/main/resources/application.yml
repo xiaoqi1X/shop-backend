@@ -50,6 +50,8 @@ seckill:
       activity-key-prefix: "seckill:activity:"
       stock-key-prefix: "seckill:stock:"
       users-key-prefix: "seckill:users:"
+      result-key-prefix: "seckill:result:"
+      result-ttl-seconds: 7200
     token-bucket:
       permits-per-second: 300
       burst-capacity: 300

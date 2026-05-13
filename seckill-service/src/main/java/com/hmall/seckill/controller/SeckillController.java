@@ -8,6 +8,7 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,5 +34,11 @@ public class SeckillController {
     @PostMapping("/orders")
     public SeckillOrderResultVO createSeckillOrder(@RequestBody SeckillOrderFormDTO formDTO) {
         return seckillService.createSeckillOrder(formDTO);
+    }
+
+    @ApiOperation("Query seckill order result")
+    @GetMapping("/orders/{requestId}")
+    public SeckillOrderResultVO querySeckillOrderResult(@PathVariable String requestId) {
+        return seckillService.queryOrderResult(requestId);
     }
 }

@@ -1,6 +1,5 @@
 package com.hmall.seckill.service.impl;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.hmall.seckill.domain.enums.SeckillStatus;
 import com.hmall.seckill.domain.exception.SeckillStockDeductFailedException;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
@@ -25,16 +24,6 @@ public class SeckillOrderFinalizeServiceImpl implements SeckillOrderFinalizeServ
     @Transactional
     public boolean finalizeOrder(SeckillOrderMessage orderMessage) {
         long startedAt = SeckillMetricsLogger.start();
-        long duplicateCheckStartedAt = SeckillMetricsLogger.start();
-        Integer existing = orderMapper.selectCount(Wrappers.<SeckillOrder>lambdaQuery()
-                .eq(SeckillOrder::getUserId, orderMessage.getUserId())
-                .eq(SeckillOrder::getSeckillId, orderMessage.getSeckillId()));
-        long duplicateCheckMs = SeckillMetricsLogger.elapsedMs(duplicateCheckStartedAt);
-        if (existing != null && existing > 0) {
-            SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "DUPLICATE_EXISTING", "duplicateCheckMs", duplicateCheckMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-            return false;
-        }
-
         SeckillOrder order = new SeckillOrder()
                 .setId(orderMessage.getOrderId())
                 .setRequestId(orderMessage.getRequestId())
@@ -55,12 +44,12 @@ public class SeckillOrderFinalizeServiceImpl implements SeckillOrderFinalizeServ
             int updated = stockMapper.deductStock(orderMessage.getSeckillId(), orderMessage.getNum());
             long stockMs = SeckillMetricsLogger.elapsedMs(stockStartedAt);
             if (updated == 0) {
-                SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "STOCK_DEDUCT_FAILED", "duplicateCheckMs", duplicateCheckMs, "insertMs", insertMs, "stockMs", stockMs, "affectedRows", updated, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+                SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "STOCK_DEDUCT_FAILED", "insertMs", insertMs, "stockMs", stockMs, "affectedRows", updated, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
                 throw new SeckillStockDeductFailedException(orderMessage.getRequestId());
             }
-            SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "SUCCESS", "duplicateCheckMs", duplicateCheckMs, "insertMs", insertMs, "stockMs", stockMs, "affectedRows", updated, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "SUCCESS", "insertMs", insertMs, "stockMs", stockMs, "affectedRows", updated, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
         } catch (DuplicateKeyException e) {
-            SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "DUPLICATE_KEY", "duplicateCheckMs", duplicateCheckMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            SeckillMetricsLogger.info("order_finalize", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "result", "DUPLICATE_KEY", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             return false;
         }
         return true;
