@@ -59,54 +59,69 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
         consumer.subscribe(rocketmq.getRequestTopic(), rocketmq.getRequestTag());
         consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -> {
             for (MessageExt msg : msgs) {
-                long startedAt = SeckillMetricsLogger.start();
-                SeckillRequestMessage requestMessage = null;
-                try {
-                    long tokenStartedAt = SeckillMetricsLogger.start();
-                    tokenBucket.acquire();
-                    long tokenWaitMs = SeckillMetricsLogger.elapsedMs(tokenStartedAt);
-                    requestMessage = objectMapper.readValue(
-                            new String(msg.getBody(), StandardCharsets.UTF_8),
-                            SeckillRequestMessage.class
-                    );
-                    long quotaStartedAt = SeckillMetricsLogger.start();
-                    SeckillQuotaResult result = quotaService.tryAcquire(requestMessage);
-                    long quotaMs = SeckillMetricsLogger.elapsedMs(quotaStartedAt);
-                    long orderMqMs = 0L;
-                    if (result == SeckillQuotaResult.SUCCESS) {
-                        try {
-                            long orderMqStartedAt = SeckillMetricsLogger.start();
-                            orderMessageProducer.send(buildOrderMessage(requestMessage));
-                            orderMqMs = SeckillMetricsLogger.elapsedMs(orderMqStartedAt);
-                            resultPushService.push(requestMessage, SeckillStatus.QUOTA_SUCCESS, null);
-                        } catch (RuntimeException e) {
-                            quotaService.release(requestMessage);
-                            SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "msgId", msg.getMsgId(), "quotaResult", result, "tokenWaitMs", tokenWaitMs, "quotaMs", quotaMs, "orderMqMs", orderMqMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                            throw e;
-                        }
-                    } else if (result == SeckillQuotaResult.DUPLICATE) {
-                        resultPushService.push(requestMessage, SeckillStatus.DUPLICATE_ORDER, null);
-                    } else if (result == SeckillQuotaResult.SOLD_OUT) {
-                        resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, null);
-                    } else {
-                        resultPushService.push(requestMessage, result == SeckillQuotaResult.NOT_READY ? SeckillStatus.NOT_READY : SeckillStatus.FAILED, null);
-                    }
-                    SeckillMetricsLogger.info("request_consume", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "msgId", msg.getMsgId(), "quotaResult", result, "tokenWaitMs", tokenWaitMs, "quotaMs", quotaMs, "orderMqMs", orderMqMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    log.debug("Consumed seckill request, requestId={}, result={}, msgId={}",
-                            requestMessage.getRequestId(), result, msg.getMsgId());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage == null ? null : requestMessage.getRequestId(), "msgId", msg.getMsgId(), "result", "INTERRUPTED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    return ConsumeConcurrentlyStatus.RECONSUME_LATER;
-                } catch (Exception e) {
-                    SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage == null ? null : requestMessage.getRequestId(), "seckillId", requestMessage == null ? null : requestMessage.getSeckillId(), "userId", requestMessage == null ? null : requestMessage.getUserId(), "msgId", msg.getMsgId(), "result", "EXCEPTION", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    log.error("Failed to consume seckill request message, msgId={}", msg.getMsgId(), e);
+                if (handleMessage(msg) == ConsumeConcurrentlyStatus.RECONSUME_LATER) {
                     return ConsumeConcurrentlyStatus.RECONSUME_LATER;
                 }
             }
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
         consumer.start();
+    }
+
+    ConsumeConcurrentlyStatus handleMessage(MessageExt msg) {
+        long startedAt = SeckillMetricsLogger.start();
+        SeckillRequestMessage requestMessage = null;
+        try {
+            long tokenStartedAt = SeckillMetricsLogger.start();
+            if (tokenBucket != null) {
+                tokenBucket.acquire();
+            }
+            long tokenWaitMs = SeckillMetricsLogger.elapsedMs(tokenStartedAt);
+            requestMessage = objectMapper.readValue(
+                    new String(msg.getBody(), StandardCharsets.UTF_8),
+                    SeckillRequestMessage.class
+            );
+            long quotaStartedAt = SeckillMetricsLogger.start();
+            SeckillQuotaResult result = quotaService.tryAcquire(requestMessage);
+            long quotaMs = SeckillMetricsLogger.elapsedMs(quotaStartedAt);
+            long orderMqMs = 0L;
+            if (result == SeckillQuotaResult.SUCCESS) {
+                try {
+                    long orderMqStartedAt = SeckillMetricsLogger.start();
+                    orderMessageProducer.send(buildOrderMessage(requestMessage));
+                    orderMqMs = SeckillMetricsLogger.elapsedMs(orderMqStartedAt);
+                    resultPushService.push(requestMessage, SeckillStatus.QUOTA_SUCCESS, null);
+                } catch (RuntimeException e) {
+                    quotaService.release(requestMessage);
+                    if (isFinalRetry(msg, properties.getRocketmq().getRequestConsumer())) {
+                        resultPushService.push(requestMessage, SeckillStatus.FAILED, "Failed to enqueue seckill order after retries");
+                    }
+                    SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "msgId", msg.getMsgId(), "quotaResult", result, "tokenWaitMs", tokenWaitMs, "quotaMs", quotaMs, "orderMqMs", orderMqMs, "finalRetry", isFinalRetry(msg, properties.getRocketmq().getRequestConsumer()), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+                    return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+                }
+            } else if (result == SeckillQuotaResult.DUPLICATE) {
+                resultPushService.push(requestMessage, SeckillStatus.DUPLICATE_ORDER, null);
+            } else if (result == SeckillQuotaResult.SOLD_OUT) {
+                resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, null);
+            } else {
+                resultPushService.push(requestMessage, result == SeckillQuotaResult.NOT_READY ? SeckillStatus.NOT_READY : SeckillStatus.FAILED, null);
+            }
+            SeckillMetricsLogger.info("request_consume", "requestId", requestMessage.getRequestId(), "seckillId", requestMessage.getSeckillId(), "userId", requestMessage.getUserId(), "msgId", msg.getMsgId(), "quotaResult", result, "tokenWaitMs", tokenWaitMs, "quotaMs", quotaMs, "orderMqMs", orderMqMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            log.debug("Consumed seckill request, requestId={}, result={}, msgId={}",
+                    requestMessage.getRequestId(), result, msg.getMsgId());
+            return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage == null ? null : requestMessage.getRequestId(), "msgId", msg.getMsgId(), "result", "INTERRUPTED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+        } catch (Exception e) {
+            if (requestMessage != null && isFinalRetry(msg, properties.getRocketmq().getRequestConsumer())) {
+                resultPushService.push(requestMessage, SeckillStatus.FAILED, "Seckill request failed after retries");
+            }
+            SeckillMetricsLogger.warn("request_consume", e, "requestId", requestMessage == null ? null : requestMessage.getRequestId(), "seckillId", requestMessage == null ? null : requestMessage.getSeckillId(), "userId", requestMessage == null ? null : requestMessage.getUserId(), "msgId", msg.getMsgId(), "result", "EXCEPTION", "finalRetry", isFinalRetry(msg, properties.getRocketmq().getRequestConsumer()), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            log.error("Failed to consume seckill request message, msgId={}", msg.getMsgId(), e);
+            return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+        }
     }
 
     private void applyConsumerProperties(SeckillAsyncProperties.Consumer consumerProperties) {
@@ -138,6 +153,11 @@ public class SeckillRequestMessageConsumer implements InitializingBean, Disposab
                 .setSeckillPrice(requestMessage.getSeckillPrice())
                 .setTotalFee(requestMessage.getTotalFee())
                 .setCreateTime(requestMessage.getCreateTime());
+    }
+
+    private boolean isFinalRetry(MessageExt msg, SeckillAsyncProperties.Consumer consumerProperties) {
+        return consumerProperties.getMaxReconsumeTimes() >= 0
+                && msg.getReconsumeTimes() >= consumerProperties.getMaxReconsumeTimes();
     }
 
     @Override

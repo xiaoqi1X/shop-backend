@@ -50,43 +50,57 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
         consumer.subscribe(rocketmq.getOrderTopic(), rocketmq.getOrderTag());
         consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -> {
             for (MessageExt msg : msgs) {
-                long startedAt = SeckillMetricsLogger.start();
-                SeckillOrderMessage orderMessage = null;
-                try {
-                    orderMessage = objectMapper.readValue(
-                            new String(msg.getBody(), StandardCharsets.UTF_8),
-                            SeckillOrderMessage.class
-                    );
-                    long finalizeStartedAt = SeckillMetricsLogger.start();
-                    boolean finalized = finalizeService.finalizeOrder(orderMessage);
-                    long finalizeMs = SeckillMetricsLogger.elapsedMs(finalizeStartedAt);
-                    if (finalized) {
-                        resultPushService.push(toRequestMessage(orderMessage), SeckillStatus.SUCCESS, null, orderMessage.getOrderId());
-                    }
-                    SeckillMetricsLogger.info("order_consume", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "finalized", finalized, "finalizeMs", finalizeMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    log.debug("Finalized seckill order, requestId={}, orderId={}, msgId={}",
-                            orderMessage.getRequestId(), orderMessage.getOrderId(), msg.getMsgId());
-                } catch (SeckillStockDeductFailedException e) {
-                    if (orderMessage == null) {
-                        SeckillMetricsLogger.warn("order_consume", e, "msgId", msg.getMsgId(), "result", "STOCK_FAILED_UNPARSED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                        log.error("Failed to handle stock deduction failure because order message was not parsed, msgId={}", msg.getMsgId(), e);
-                        return ConsumeConcurrentlyStatus.RECONSUME_LATER;
-                    }
-                    SeckillRequestMessage requestMessage = toRequestMessage(orderMessage);
-                    quotaService.release(requestMessage);
-                    resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, "Sold out");
-                    SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "STOCK_DEDUCT_FAILED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    log.warn("Database seckill stock exhausted, requestId={}, msgId={}",
-                            orderMessage.getRequestId(), msg.getMsgId());
-                } catch (Exception e) {
-                    SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage == null ? null : orderMessage.getRequestId(), "orderId", orderMessage == null ? null : orderMessage.getOrderId(), "seckillId", orderMessage == null ? null : orderMessage.getSeckillId(), "userId", orderMessage == null ? null : orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "EXCEPTION", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
-                    log.error("Failed to consume seckill order message, msgId={}", msg.getMsgId(), e);
+                if (handleMessage(msg) == ConsumeConcurrentlyStatus.RECONSUME_LATER) {
                     return ConsumeConcurrentlyStatus.RECONSUME_LATER;
                 }
             }
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
         });
         consumer.start();
+    }
+
+    ConsumeConcurrentlyStatus handleMessage(MessageExt msg) {
+        long startedAt = SeckillMetricsLogger.start();
+        SeckillOrderMessage orderMessage = null;
+        try {
+            orderMessage = objectMapper.readValue(
+                    new String(msg.getBody(), StandardCharsets.UTF_8),
+                    SeckillOrderMessage.class
+            );
+            long finalizeStartedAt = SeckillMetricsLogger.start();
+            boolean finalized = finalizeService.finalizeOrder(orderMessage);
+            long finalizeMs = SeckillMetricsLogger.elapsedMs(finalizeStartedAt);
+            SeckillRequestMessage requestMessage = toRequestMessage(orderMessage);
+            if (finalized) {
+                resultPushService.push(requestMessage, SeckillStatus.SUCCESS, null, orderMessage.getOrderId());
+            } else {
+                resultPushService.push(requestMessage, SeckillStatus.SUCCESS, "Order already finalized", orderMessage.getOrderId());
+            }
+            SeckillMetricsLogger.info("order_consume", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "finalized", finalized, "finalizeMs", finalizeMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            log.debug("Finalized seckill order, requestId={}, orderId={}, msgId={}",
+                    orderMessage.getRequestId(), orderMessage.getOrderId(), msg.getMsgId());
+            return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        } catch (SeckillStockDeductFailedException e) {
+            if (orderMessage == null) {
+                SeckillMetricsLogger.warn("order_consume", e, "msgId", msg.getMsgId(), "result", "STOCK_FAILED_UNPARSED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+                log.error("Failed to handle stock deduction failure because order message was not parsed, msgId={}", msg.getMsgId(), e);
+                return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+            }
+            SeckillRequestMessage requestMessage = toRequestMessage(orderMessage);
+            quotaService.release(requestMessage);
+            resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, "Sold out");
+            SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "STOCK_DEDUCT_FAILED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            log.warn("Database seckill stock exhausted, requestId={}, msgId={}",
+                    orderMessage.getRequestId(), msg.getMsgId());
+            return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        } catch (Exception e) {
+            if (orderMessage != null && isFinalRetry(msg, properties.getRocketmq().getOrderConsumer())) {
+                resultPushService.push(toRequestMessage(orderMessage), SeckillStatus.FAILED, "Seckill order finalization failed after retries");
+            }
+            SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage == null ? null : orderMessage.getRequestId(), "orderId", orderMessage == null ? null : orderMessage.getOrderId(), "seckillId", orderMessage == null ? null : orderMessage.getSeckillId(), "userId", orderMessage == null ? null : orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "EXCEPTION", "finalRetry", isFinalRetry(msg, properties.getRocketmq().getOrderConsumer()), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            log.error("Failed to consume seckill order message, msgId={}", msg.getMsgId(), e);
+            return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+        }
     }
 
     private void applyConsumerProperties(SeckillAsyncProperties.Consumer consumerProperties) {
@@ -117,6 +131,11 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
                 .setSeckillPrice(orderMessage.getSeckillPrice())
                 .setTotalFee(orderMessage.getTotalFee())
                 .setCreateTime(orderMessage.getCreateTime());
+    }
+
+    private boolean isFinalRetry(MessageExt msg, SeckillAsyncProperties.Consumer consumerProperties) {
+        return consumerProperties.getMaxReconsumeTimes() >= 0
+                && msg.getReconsumeTimes() >= consumerProperties.getMaxReconsumeTimes();
     }
 
     @Override
