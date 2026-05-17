@@ -48,6 +48,30 @@ CREATE TABLE IF NOT EXISTS seckill_order (
   KEY idx_request_id (request_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='seckill order';
 
+CREATE TABLE IF NOT EXISTS seckill_order_outbox (
+  id BIGINT NOT NULL COMMENT 'outbox record id',
+  request_id VARCHAR(64) NOT NULL COMMENT 'request id for idempotent MQ send',
+  order_id BIGINT NOT NULL COMMENT 'seckill order id to send',
+  seckill_id BIGINT NOT NULL COMMENT 'seckill activity id',
+  item_id BIGINT NOT NULL COMMENT 'item id',
+  user_id BIGINT NOT NULL COMMENT 'user id',
+  num INT NOT NULL COMMENT 'purchase quantity',
+  seckill_price INT NOT NULL COMMENT 'seckill unit price in cents',
+  total_fee INT NOT NULL COMMENT 'total fee in cents',
+  status VARCHAR(32) NOT NULL COMMENT 'NEW, SENT, SEND_FAILED, FINALIZED, FAILED',
+  retry_count INT NOT NULL DEFAULT 0 COMMENT 'send retry count',
+  max_retry_count INT NOT NULL DEFAULT 5 COMMENT 'maximum send retry count',
+  next_retry_time DATETIME DEFAULT NULL COMMENT 'next retry time',
+  last_error VARCHAR(512) DEFAULT NULL COMMENT 'last send or finalization error',
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+  update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_request_id (request_id),
+  UNIQUE KEY uk_order_id (order_id),
+  KEY idx_status_retry_time (status, next_retry_time),
+  KEY idx_user_seckill (user_id, seckill_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='seckill order outbox';
+
 INSERT INTO seckill_activity (id, item_id, seckill_price, start_time, end_time, limit_count, status)
 VALUES
   (1, 317578, 9900, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 1 DAY), 1, 1),

@@ -7,6 +7,7 @@ import com.hmall.seckill.domain.exception.SeckillStockDeductFailedException;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.service.SeckillOrderFinalizeService;
+import com.hmall.seckill.service.SeckillOrderOutboxService;
 import com.hmall.seckill.service.SeckillQuotaService;
 import com.hmall.seckill.service.SeckillResultPushService;
 import com.hmall.seckill.support.SeckillMetricsLogger;
@@ -32,12 +33,18 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
     private final SeckillOrderFinalizeService finalizeService;
     private final SeckillQuotaService quotaService;
     private final SeckillResultPushService resultPushService;
+    private final SeckillOrderOutboxService outboxService;
 
     private DefaultMQPushConsumer consumer;
+    private LocalTokenBucket tokenBucket;
 
     @Override
     public void afterPropertiesSet() throws Exception {
         SeckillAsyncProperties.Rocketmq rocketmq = properties.getRocketmq();
+        SeckillAsyncProperties.TokenBucket tokenBucketProperties = properties.getTokenBucket();
+        tokenBucket = new LocalTokenBucket(tokenBucketProperties.getPermitsPerSecond(), tokenBucketProperties.getBurstCapacity());
+        log.info("Starting seckill order finalization token bucket, permitsPerSecond={}, burstCapacity={}",
+                tokenBucketProperties.getPermitsPerSecond(), tokenBucketProperties.getBurstCapacity());
         consumer = new DefaultMQPushConsumer(rocketmq.getOrderConsumerGroup());
         consumer.setNamesrvAddr(rocketmq.getNameServer());
         applyConsumerProperties(rocketmq.getOrderConsumer());
@@ -67,6 +74,11 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
                     new String(msg.getBody(), StandardCharsets.UTF_8),
                     SeckillOrderMessage.class
             );
+            long tokenStartedAt = SeckillMetricsLogger.start();
+            if (tokenBucket != null) {
+                tokenBucket.acquire();
+            }
+            long tokenWaitMs = SeckillMetricsLogger.elapsedMs(tokenStartedAt);
             long finalizeStartedAt = SeckillMetricsLogger.start();
             boolean finalized = finalizeService.finalizeOrder(orderMessage);
             long finalizeMs = SeckillMetricsLogger.elapsedMs(finalizeStartedAt);
@@ -76,7 +88,8 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
             } else {
                 resultPushService.push(requestMessage, SeckillStatus.SUCCESS, "Order already finalized", orderMessage.getOrderId());
             }
-            SeckillMetricsLogger.info("order_consume", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "finalized", finalized, "finalizeMs", finalizeMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            outboxService.markFinalized(orderMessage.getRequestId());
+            SeckillMetricsLogger.info("order_consume", "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "finalized", finalized, "tokenWaitMs", tokenWaitMs, "finalizeMs", finalizeMs, "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.debug("Finalized seckill order, requestId={}, orderId={}, msgId={}",
                     orderMessage.getRequestId(), orderMessage.getOrderId(), msg.getMsgId());
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
@@ -89,13 +102,19 @@ public class SeckillOrderMessageConsumer implements InitializingBean, Disposable
             SeckillRequestMessage requestMessage = toRequestMessage(orderMessage);
             quotaService.release(requestMessage);
             resultPushService.push(requestMessage, SeckillStatus.SOLD_OUT, "Sold out");
+            outboxService.markFailed(orderMessage.getRequestId(), "Database seckill stock exhausted");
             SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage.getRequestId(), "orderId", orderMessage.getOrderId(), "seckillId", orderMessage.getSeckillId(), "userId", orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "STOCK_DEDUCT_FAILED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.warn("Database seckill stock exhausted, requestId={}, msgId={}",
                     orderMessage.getRequestId(), msg.getMsgId());
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage == null ? null : orderMessage.getRequestId(), "orderId", orderMessage == null ? null : orderMessage.getOrderId(), "seckillId", orderMessage == null ? null : orderMessage.getSeckillId(), "userId", orderMessage == null ? null : orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "INTERRUPTED", "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
+            return ConsumeConcurrentlyStatus.RECONSUME_LATER;
         } catch (Exception e) {
             if (orderMessage != null && isFinalRetry(msg, properties.getRocketmq().getOrderConsumer())) {
                 resultPushService.push(toRequestMessage(orderMessage), SeckillStatus.FAILED, "Seckill order finalization failed after retries");
+                outboxService.markFailed(orderMessage.getRequestId(), "Seckill order finalization failed after retries");
             }
             SeckillMetricsLogger.warn("order_consume", e, "requestId", orderMessage == null ? null : orderMessage.getRequestId(), "orderId", orderMessage == null ? null : orderMessage.getOrderId(), "seckillId", orderMessage == null ? null : orderMessage.getSeckillId(), "userId", orderMessage == null ? null : orderMessage.getUserId(), "msgId", msg.getMsgId(), "result", "EXCEPTION", "finalRetry", isFinalRetry(msg, properties.getRocketmq().getOrderConsumer()), "totalMs", SeckillMetricsLogger.elapsedMs(startedAt));
             log.error("Failed to consume seckill order message, msgId={}", msg.getMsgId(), e);

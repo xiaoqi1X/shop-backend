@@ -57,6 +57,12 @@ seckill:
       burst-capacity: 300
     websocket:
       endpoint: /ws/seckill
+    outbox:
+      enabled: true
+      scan-interval-ms: 5000
+      batch-size: 100
+      max-retry-count: 5
+      retry-delay-seconds: 5
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
   configuration:

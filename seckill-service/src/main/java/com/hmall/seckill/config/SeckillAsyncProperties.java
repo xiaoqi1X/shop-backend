@@ -13,6 +13,7 @@ public class SeckillAsyncProperties {
     private Redis redis = new Redis();
     private TokenBucket tokenBucket = new TokenBucket();
     private Websocket websocket = new Websocket();
+    private Outbox outbox = new Outbox();
 
     @Data
     public static class Rocketmq {
@@ -64,5 +65,14 @@ public class SeckillAsyncProperties {
     @Data
     public static class Websocket {
         private String endpoint;
+    }
+
+    @Data
+    public static class Outbox {
+        private boolean enabled = true;
+        private long scanIntervalMs = 5000L;
+        private int batchSize = 100;
+        private int maxRetryCount = 5;
+        private long retryDelaySeconds = 5L;
     }
 }

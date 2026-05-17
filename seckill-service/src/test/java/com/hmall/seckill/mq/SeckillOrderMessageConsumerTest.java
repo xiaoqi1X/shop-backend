@@ -7,6 +7,7 @@ import com.hmall.seckill.domain.exception.SeckillStockDeductFailedException;
 import com.hmall.seckill.domain.mq.SeckillOrderMessage;
 import com.hmall.seckill.domain.mq.SeckillRequestMessage;
 import com.hmall.seckill.service.SeckillOrderFinalizeService;
+import com.hmall.seckill.service.SeckillOrderOutboxService;
 import com.hmall.seckill.service.SeckillQuotaService;
 import com.hmall.seckill.service.SeckillResultPushService;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
@@ -34,6 +35,8 @@ class SeckillOrderMessageConsumerTest {
     private SeckillQuotaService quotaService;
     @Mock
     private SeckillResultPushService resultPushService;
+    @Mock
+    private SeckillOrderOutboxService outboxService;
 
     private SeckillOrderMessageConsumer consumer;
     private ObjectMapper objectMapper;
@@ -43,7 +46,7 @@ class SeckillOrderMessageConsumerTest {
         SeckillAsyncProperties properties = new SeckillAsyncProperties();
         properties.getRocketmq().getOrderConsumer().setMaxReconsumeTimes(3);
         objectMapper = new ObjectMapper();
-        consumer = new SeckillOrderMessageConsumer(properties, objectMapper, finalizeService, quotaService, resultPushService);
+        consumer = new SeckillOrderMessageConsumer(properties, objectMapper, finalizeService, quotaService, resultPushService, outboxService);
     }
 
     @Test
@@ -54,6 +57,7 @@ class SeckillOrderMessageConsumerTest {
 
         assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
         verify(resultPushService).push(any(SeckillRequestMessage.class), eq(SeckillStatus.SUCCESS), eq(null), eq(123L));
+        verify(outboxService).markFinalized("req-1");
     }
 
     @Test
@@ -64,6 +68,7 @@ class SeckillOrderMessageConsumerTest {
 
         assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
         verify(resultPushService).push(any(SeckillRequestMessage.class), eq(SeckillStatus.SUCCESS), eq("Order already finalized"), eq(123L));
+        verify(outboxService).markFinalized("req-1");
     }
 
     @Test
@@ -76,6 +81,7 @@ class SeckillOrderMessageConsumerTest {
         assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.CONSUME_SUCCESS);
         verify(quotaService).release(any(SeckillRequestMessage.class));
         verify(resultPushService).push(any(SeckillRequestMessage.class), eq(SeckillStatus.SOLD_OUT), eq("Sold out"));
+        verify(outboxService).markFailed("req-1", "Database seckill stock exhausted");
     }
 
     @Test
@@ -98,6 +104,7 @@ class SeckillOrderMessageConsumerTest {
 
         assertThat(status).isEqualTo(ConsumeConcurrentlyStatus.RECONSUME_LATER);
         verify(resultPushService).push(any(SeckillRequestMessage.class), eq(SeckillStatus.FAILED), eq("Seckill order finalization failed after retries"));
+        verify(outboxService).markFailed("req-1", "Seckill order finalization failed after retries");
     }
 
     private MessageExt messageExt(SeckillOrderMessage orderMessage, int reconsumeTimes) throws Exception {
