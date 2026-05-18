@@ -44,3 +44,8 @@ hm:
       - /users/login
       - /items/**
       - /seckill/items
+  seckill:
+    guard:
+      enabled: true
+      order-path: /seckill/orders
+      max-body-bytes: 2048
