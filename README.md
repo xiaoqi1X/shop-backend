@@ -1,6 +1,6 @@
-# 黑马商城后端
+# 微服务电商交易平台
 
-这是黑马商城的后端微服务工程，覆盖商品、购物车、用户、交易、支付、网关和秒杀等业务。工程采用 Maven 多模块结构，基于 Spring Boot、Spring Cloud、Nacos、OpenFeign、MyBatis-Plus、RocketMQ、Redis 和 MySQL 构建。
+这是微服务电商交易平台的后端代码，覆盖商品、购物车、用户、交易、支付、网关和秒杀等业务。工程采用 Maven 多模块结构，基于 Spring Boot、Spring Cloud、Nacos、OpenFeign、MyBatis-Plus、RocketMQ、Redis 和 MySQL 构建。
 
 ## 技术栈
 
